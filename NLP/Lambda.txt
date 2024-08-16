@@ -1,0 +1,172 @@
+import json
+import boto3
+from datetime import datetime
+
+#################################################
+##############   HELPER FUNCTIONS   #############
+#################################################
+
+dynamodb = boto3.resource('dynamodb')
+IMR_Table = dynamodb.Table('IMRBot_db')
+    
+def IMRToDB(Diagnosis, Findings):
+    
+        now = datetime.now()
+
+        dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+
+        IMR_Table.put_item(
+            Item = {
+            'IMR_Date': dt_string,
+            'Diagnosis': Diagnosis,
+            'Findings': Findings
+            }
+        )
+
+        
+        
+def delegate(session_attributes, intent_name, slots):
+    response = {
+        "sessionState": {
+            "sessionAttributes": {},
+            "dialogAction": {
+                "type": "Delegate"
+            },
+            "intent":{
+                "name": intent_name,
+                "slots": slots
+            }
+        }
+    }
+    return response
+
+
+def close(session_attributes, intent_name, fulfillment_state, message):
+
+    response = {
+    "sessionState": {
+        "sessionAttributes": session_attributes,
+        "dialogAction": {
+            "type": "Close"
+        },
+        "intent": {
+            'name':intent_name,
+            'state':fulfillment_state
+            
+            }
+    },
+    "messages": [
+        {
+            "contentType": "PlainText",
+            "content": message
+        }
+    ]}
+
+    return response
+
+# display error msg if cannot find value of slot 
+def prep_elicit_slot_for_failed_validation(intent_name, slots, slot_to_elicit, message):
+    
+    response = {
+        "sessionState":{
+            "dialogAction": {
+                "slotToElicit": slot_to_elicit,
+                "type": "ElicitSlot"
+            },
+            "intent": {
+                "name": intent_name,
+                "slots": slots,
+                "state": "InProgress"
+            }
+        },
+        "messages":[{
+            "contentType": "PlainText",
+            "content": message
+        }]
+    }
+    
+    return response
+    
+
+#################################################
+##############   INTENT: SecondOption   ############
+#################################################
+
+
+
+
+
+def SecondOption(intent_request):
+    source = intent_request['invocationSource']
+    intent_name = intent_request['sessionState']['intent']['name']
+    slots = intent_request["sessionState"]['intent']['slots']
+    
+    
+    if source == "DialogCodeHook":
+        validation_result = True
+        
+        for slot_key, slot_item in slots.items():
+            
+            if intent_request.get("proposedNextState", None):
+                if intent_request["proposedNextState"]["prompt"]["attempt"] == "Initial":
+                    if not slot_item:
+                        msg = f"Please Enter your {slot_key}."
+                        return prep_elicit_slot_for_failed_validation(intent_name, slots, slot_key, msg)
+                    
+            ## if slot_key == "findings" and slot_item:
+               ## if checkDB(slot_item['value']['originalValue'].lower()):
+                 ##   continue
+              ##  slot = "IMRFindings"
+              ##  msg = "Validation Error 'validation diagnosis'"
+              ##  return prep_elicit_slot_for_failed_validation(intent_name, slots, slot, msg)
+            
+            
+            maybeConfidence = 0
+            for intent in intent_request["interpretations"]:
+                confidence = intent.get("nluConfidence", 0)
+                if confidence > maybeConfidence:
+                    maybeConfidence = confidence
+            
+            if maybeConfidence <= 0.96:
+                msg = f"Sorry I could not get your {slot_key}, could you please reenter it."
+                return prep_elicit_slot_for_failed_validation(intent_name, slots, slot_key, msg)
+                
+
+                
+      
+        return delegate({}, intent_name, slots)
+        
+    elif source == "FulfillmentCodeHook": 
+        # Get slot values
+        Diagnosis = slots['IMRDiagnosis']['value']['originalValue']
+        findings = slots['IMRFindings']['value']['originalValue']
+        
+        # run the ml to check if it is fulfillment ornot
+        # Add order to database
+        
+        IMRToDB(Diagnosis, findings)
+        
+        
+        
+        msg = f"Ok! You have been diagnose with {Diagnosis} and your symptoms is {findings}. All the best to you!!!."        
+        return close({}, intent_name, 'Fulfilled', msg)
+
+    raise Exception('Error with OrderFood function')
+
+#################################################
+####################   MAIN   ###################
+#################################################
+
+def router(event):
+    intent_name = event['sessionState']['intent']['name']
+    
+    
+    if intent_name == "SecondOption":
+        return SecondOption(event)
+   
+    raise Exception('No environment variable for intent: ' + intent_name)
+
+def lambda_handler(event, context):
+    print(event)
+    response = router(event)
+    return response
